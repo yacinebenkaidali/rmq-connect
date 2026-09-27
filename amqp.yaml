@@ -1,0 +1,12 @@
+---
+brokerURI: amqp://guest:guest@localhost:5672/
+exchanges:
+  - name: exchage01
+    type: direct
+queues:
+  - name: queue-1
+    exchange: exchage01
+    bindingKey: bindingKey
+consumers:
+  - name: consumer01
+    queue: queue-1
