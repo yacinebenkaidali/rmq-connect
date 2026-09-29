@@ -5,18 +5,34 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os"
+	"os/signal"
+	"syscall"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 	lAMQP "github.com/yacinebenkaidali/rmq-connect/amqp"
 )
 
 type Connection struct {
-	Ctx      context.Context
-	Conn     *amqp.Connection
-	Channel  *amqp.Channel
-	Handlers map[string]<-chan amqp.Delivery
+	Ctx     context.Context
+	PubConn *amqp.Connection // publisher connection
+	ConConn *amqp.Connection // consumer connection
+
+	Consumers  map[string]*Consumer
+	Publishers map[string]*Publisher
 
 	cfg *lAMQP.AMQP
+}
+
+type Consumer struct {
+	name         string
+	conHandlerCh <-chan amqp.Delivery
+	conCh        *amqp.Channel
+}
+
+type Publisher struct {
+	name  string
+	conCh *amqp.Channel
 }
 
 func main() {
@@ -25,14 +41,14 @@ func main() {
 
 	flag.Parse()
 
-	var forever chan struct{}
-
 	amqpCfg, err := lAMQP.LoadConfigFile(*configPath)
 	if err != nil {
 		log.Fatal(err)
 	}
+	ctx := context.Background()
+	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGTERM, os.Interrupt)
 
-	conn, err := Connect(amqpCfg, context.Background())
+	conn, err := Connect(amqpCfg, ctx)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -43,49 +59,47 @@ func main() {
 		log.Fatal(err)
 	}
 
-	conn.Register("consumer01", func(ctx context.Context, msg amqp.Delivery) error {
+	if err := conn.RegisterConsumer("consumer01", func(ctx context.Context, msg amqp.Delivery) error {
 		log.Println("consumer01, received ", string(msg.Body))
 		return nil
-	})
+	}); err != nil {
+		log.Fatal(err)
+	}
+
+	// var forever chan struct{}
+
+	defer cancel()
 
 	log.Println("consuming")
-	<-forever
+	<-ctx.Done()
+	log.Println("exit signal received, exiting...")
 
 }
 
 func Connect(cfg *lAMQP.AMQP, ctx context.Context) (*Connection, error) {
-	conn, err := amqp.Dial(cfg.BrokerURI)
+	conConn, err := amqp.Dial(cfg.BrokerURI)
 	if err != nil {
 		return nil, err
 	}
 	connection := Connection{
-		Ctx:      ctx,
-		Conn:     conn,
-		cfg:      cfg,
-		Handlers: make(map[string]<-chan amqp.Delivery),
+		Ctx:        ctx,
+		ConConn:    conConn,
+		cfg:        cfg,
+		PubConn:    nil, //TODO
+		Consumers:  make(map[string]*Consumer),
+		Publishers: make(map[string]*Publisher),
 	}
-
-	go func() {
-		<-ctx.Done()
-		connection.Close()
-	}()
-
-	ch, err := connection.Conn.Channel()
-	if err != nil {
-		return nil, err
-	}
-	connection.Channel = ch
 
 	return &connection, err
 }
 
-func (c *Connection) Register(consumer string, handler func(ctx context.Context, msg amqp.Delivery) error) error {
-	msgs, ok := c.Handlers[consumer]
+func (c *Connection) RegisterConsumer(consumerName string, handler func(ctx context.Context, msg amqp.Delivery) error) error {
+	consumer, ok := c.Consumers[consumerName]
 	if !ok {
-		return fmt.Errorf("the consumer %s was not declared in the config file", consumer)
+		return fmt.Errorf("the consumer %s was not declared in the config file", consumer.name)
 	}
 	go func() {
-		for msg := range msgs {
+		for msg := range consumer.conHandlerCh {
 			handler(c.Ctx, msg)
 		}
 	}()
@@ -93,31 +107,16 @@ func (c *Connection) Register(consumer string, handler func(ctx context.Context,
 }
 
 func (c *Connection) Setup() error {
+	consumers := make(map[string]string) // queue -> consumer
+	queues := make(map[string]string)    // exchange -> queue
 
-	for _, exchange := range c.cfg.Exchanges {
-		if err := c.Channel.ExchangeDeclare(exchange.Name, exchange.Type, false, false, false, false, nil); err != nil {
-			return err
-		}
-	}
-
-	for _, q := range c.cfg.Queues {
-		_, err := c.Channel.QueueDeclare(
-			q.Name, // name
-			true,   // durability
-			false,  // delete when unused
-			false,  // exclusive
-			false,  // no-wait
-			amqp.Table{
-				amqp.QueueTypeArg: amqp.QueueTypeQuorum,
-			},
-		)
+	// declaring consumers
+	for _, consumer := range c.cfg.Consumers {
+		ch, err := c.ConConn.Channel()
 		if err != nil {
 			return err
 		}
-	}
-
-	for _, consumer := range c.cfg.Consumers {
-		msgs, err := c.Channel.Consume(
+		msgs, err := ch.Consume(
 			consumer.Queue, // queue
 			consumer.Name,  // consumer
 			true,           // auto-ack
@@ -130,11 +129,54 @@ func (c *Connection) Setup() error {
 			return err
 		}
 
-		c.Handlers[consumer.Name] = msgs
+		consumers[consumer.Queue] = consumer.Name
+
+		c.Consumers[consumer.Name] = &Consumer{
+			name:         consumer.Name,
+			conHandlerCh: msgs,
+			conCh:        ch,
+		}
 	}
+
+	// declaring Queues
+	for _, q := range c.cfg.Queues {
+		conName := consumers[q.Name]
+		consumer := c.Consumers[conName]
+
+		_, err := consumer.conCh.QueueDeclare(
+			q.Name, // name
+			true,   // durability
+			false,  // delete when unused
+			false,  // exclusive
+			false,  // no-wait
+			amqp.Table{
+				amqp.QueueTypeArg: amqp.QueueTypeQuorum,
+			},
+		)
+		if err != nil {
+			return err
+		}
+		err = consumer.conCh.QueueBind(q.Name, q.BindingKey, q.Exchange, false, nil)
+		if err != nil {
+			return err
+		}
+		queues[q.Exchange] = q.Name
+	}
+
+	// declaring Exchanges
+	for _, e := range c.cfg.Exchanges {
+		q := queues[e.Name]
+		conName := consumers[q]
+		consumer := c.Consumers[conName]
+
+		if err := consumer.conCh.ExchangeDeclare(e.Name, e.Type, false, false, false, false, nil); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
 func (c *Connection) Close() error {
-	return c.Conn.Close()
+	return c.PubConn.Close()
 }
