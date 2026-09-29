@@ -178,5 +178,15 @@ func (c *Connection) Setup() error {
 }
 
 func (c *Connection) Close() error {
-	return c.PubConn.Close()
+	if c.ConConn != nil && !c.ConConn.IsClosed() {
+		err := c.ConConn.Close()
+		if err != nil {
+			return err
+		}
+	}
+
+	if c.PubConn != nil && !c.PubConn.IsClosed() {
+		return c.PubConn.Close()
+	}
+	return nil
 }
