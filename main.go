@@ -109,10 +109,28 @@ func (c *Connection) RegisterConsumer(consumerName string, handler func(ctx cont
 		return fmt.Errorf("the consumer %s was not declared in the config file", consumerName)
 	}
 	go func() {
-		for msg := range consumer.conHandlerCh {
-			err := handler(c.Ctx, msg)
-			if err != nil {
+		for {
+			select {
+			case msg := <-consumer.conHandlerCh:
+				{
+					// recheck this when we support more consumer fields
+					err := handler(c.Ctx, msg)
+					if err != nil {
+						log.Printf("consumer %s: handler error: %v", consumerName, err)
+						if err = consumer.conCh.Reject(msg.DeliveryTag, true); err != nil {
+							log.Printf("consumer %s: failed to reject delivery tag %d: %v", consumerName, msg.DeliveryTag, err)
+						}
+						continue
+					}
+					if err = consumer.conCh.Ack(msg.DeliveryTag, false); err != nil {
+						log.Printf("consumer %s: failed to Ack delivery tag %d: %v", consumerName, msg.DeliveryTag, err)
+					}
 
+				}
+			case <-c.Ctx.Done():
+				{
+					return
+				}
 			}
 		}
 	}()
@@ -157,7 +175,7 @@ func (c *Connection) Setup() error {
 		msgs, err := ch.Consume(
 			consumer.Queue, // queue
 			consumer.Name,  // consumer
-			true,           // auto-ack
+			false,          // auto-ack
 			false,          // exclusive
 			false,          // no-local
 			false,          // no-wait
