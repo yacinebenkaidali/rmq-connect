@@ -40,6 +40,12 @@ func validateConsumer(c *Consumer, i int, queues map[string]struct{}) error {
 	if c.Queue == "" {
 		return fmt.Errorf("consumer %d queue name is required", i)
 	}
+	if c.PrefetchCount < 0 {
+		return fmt.Errorf("consumer %d prefetch can not be less than 0", i)
+	} else if c.PrefetchCount == 0 {
+		// using the default pretech count when it is not provided (optional)
+		c.PrefetchCount = DEFAULT_PREFETCH_COUNT
+	}
 	if _, ok := queues[c.Queue]; !ok {
 		return fmt.Errorf("consumer's queue %s at %d is not declared", c.Queue, i)
 	}

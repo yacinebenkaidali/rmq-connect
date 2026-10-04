@@ -82,18 +82,18 @@ func (c *Connection) Setup() error {
 	// exchanges → queues (+ bind) → consumers
 	// declaring Exchanges
 	for _, e := range c.cfg.Exchanges {
-		if err := c.topologyCh.ExchangeDeclare(e.Name, e.Type, false, false, false, false, nil); err != nil {
+		if err := c.topologyCh.ExchangeDeclare(e.Name, e.Type, e.Durability, false, false, false, nil); err != nil {
 			return err
 		}
 	}
 	// declaring Queues and their bindings
 	for _, q := range c.cfg.Queues {
 		_, err := c.topologyCh.QueueDeclare(
-			q.Name, // name
-			true,   // durability
-			false,  // delete when unused
-			false,  // exclusive
-			false,  // no-wait
+			q.Name,       // name
+			q.Durability, // durability
+			false,        // delete when unused
+			false,        // exclusive
+			false,        // no-wait
 			amqp.Table{
 				amqp.QueueTypeArg: amqp.QueueTypeQuorum,
 			},
@@ -113,6 +113,7 @@ func (c *Connection) Setup() error {
 			return err
 		}
 
+		ch.Qos(consumer.PrefetchCount, 0, false)
 		msgs, err := ch.Consume(
 			consumer.Queue, // queue
 			consumer.Name,  // consumer
