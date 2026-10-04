@@ -40,6 +40,18 @@ func validateConsumer(c *Consumer, i int, queues map[string]struct{}) error {
 	if c.Queue == "" {
 		return fmt.Errorf("consumer %d queue name is required", i)
 	}
+	if c.PrefetchCount < 0 {
+		return fmt.Errorf("consumer %d prefetch can not be less than 0", i)
+	} else if c.PrefetchCount == 0 {
+		// using the default pretech count when it is not provided (optional)
+		c.PrefetchCount = DEFAULT_PREFETCH_COUNT
+	}
+	if c.MaxFailedAttempts < 0 {
+		return fmt.Errorf("consumer %d failed retry count can not be less than 0", i)
+	} else if c.MaxFailedAttempts == 0 {
+		// using the default message retry count when it is not provided (optional)
+		c.MaxFailedAttempts = DEFAULT_FAILED_MSG_RETRIES
+	}
 	if _, ok := queues[c.Queue]; !ok {
 		return fmt.Errorf("consumer's queue %s at %d is not declared", c.Queue, i)
 	}
@@ -98,11 +110,12 @@ func validateAMQP(cfg *AMQP) error {
 		queues[q.Name] = struct{}{}
 	}
 
-	for i, c := range cfg.Consumers {
+	for i := 0; i < len(cfg.Consumers); i++ {
+		c := cfg.Consumers[i]
 		if _, ok := consumers[c.Name]; ok {
 			return fmt.Errorf("consumer %s declared more than once", c.Name)
 		}
-		if err := validateConsumer(&c, i, queues); err != nil {
+		if err := validateConsumer(&cfg.Consumers[i], i, queues); err != nil {
 			return err
 		}
 		consumers[c.Name] = struct{}{}

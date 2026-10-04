@@ -3,13 +3,17 @@ brokerURI: amqp://guest:guest@localhost:5672/
 exchanges:
   - name: exchage01
     type: direct
+    durability: true
 queues:
   - name: queue-1
     exchange: exchage01
     bindingKey: bindingKey
+    durability: true
 consumers:
   - name: consumer01
     queue: queue-1
+    prefetchCount: 10
+    maxFailedAttempts: 5
 publishers:
   - name: publisher01
     exchange: exchage01

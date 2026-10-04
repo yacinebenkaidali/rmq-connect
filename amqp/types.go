@@ -15,17 +15,21 @@ type AMQP struct {
 	Publishers []Publisher `yaml:"publishers" json:"publishers"`
 }
 type Exchange struct {
-	Name string `yaml:"name" json:"name"`
-	Type string `yaml:"type" json:"type"`
+	Name       string `yaml:"name" json:"name"`
+	Type       string `yaml:"type" json:"type"`
+	Durability bool   `yaml:"durability" json:"durability"`
 }
 type Queue struct {
 	Name       string `yaml:"name" json:"name"`
 	Exchange   string `yaml:"exchange" json:"exchange"`
 	BindingKey string `yaml:"bindingKey" json:"bindingKey"`
+	Durability bool   `yaml:"durability" json:"durability"`
 }
 type Consumer struct {
-	Name  string `yaml:"name" json:"name"`
-	Queue string `yaml:"queue" json:"queue"`
+	Name              string `yaml:"name" json:"name"`
+	Queue             string `yaml:"queue" json:"queue"`
+	PrefetchCount     int    `yaml:"prefetchCount" json:"prefetchCount"`
+	MaxFailedAttempts int    `yaml:"maxFailedAttempts" json:"maxFailedAttempts"`
 
 	conHandlerCh <-chan amqp.Delivery
 	conCh        *amqp.Channel
@@ -37,7 +41,6 @@ type Publisher struct {
 
 	PubCh *amqp.Channel
 }
-
 type Connection struct {
 	Ctx     context.Context
 	PubConn *amqp.Connection // publisher connection

@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 	"gopkg.in/yaml.v3"
@@ -81,18 +82,18 @@ func (c *Connection) Setup() error {
 	// exchanges → queues (+ bind) → consumers
 	// declaring Exchanges
 	for _, e := range c.cfg.Exchanges {
-		if err := c.topologyCh.ExchangeDeclare(e.Name, e.Type, false, false, false, false, nil); err != nil {
+		if err := c.topologyCh.ExchangeDeclare(e.Name, e.Type, e.Durability, false, false, false, nil); err != nil {
 			return err
 		}
 	}
 	// declaring Queues and their bindings
 	for _, q := range c.cfg.Queues {
 		_, err := c.topologyCh.QueueDeclare(
-			q.Name, // name
-			true,   // durability
-			false,  // delete when unused
-			false,  // exclusive
-			false,  // no-wait
+			q.Name,       // name
+			q.Durability, // durability
+			false,        // delete when unused
+			false,        // exclusive
+			false,        // no-wait
 			amqp.Table{
 				amqp.QueueTypeArg: amqp.QueueTypeQuorum,
 			},
@@ -112,6 +113,9 @@ func (c *Connection) Setup() error {
 			return err
 		}
 
+		if err := ch.Qos(consumer.PrefetchCount, 0, false); err != nil {
+			return err
+		}
 		msgs, err := ch.Consume(
 			consumer.Queue, // queue
 			consumer.Name,  // consumer
@@ -126,15 +130,21 @@ func (c *Connection) Setup() error {
 		}
 
 		c.Consumers[consumer.Name] = &Consumer{
-			Name:         consumer.Name,
-			conCh:        ch,
-			conHandlerCh: msgs,
+			Name:              consumer.Name,
+			conCh:             ch,
+			conHandlerCh:      msgs,
+			Queue:             consumer.Queue,
+			PrefetchCount:     consumer.PrefetchCount,
+			MaxFailedAttempts: consumer.MaxFailedAttempts,
 		}
 	}
 
 	for _, publisher := range c.cfg.Publishers {
 		ch, err := c.PubConn.Channel()
 		if err != nil {
+			return err
+		}
+		if err := ch.Confirm(false); err != nil {
 			return err
 		}
 
@@ -179,16 +189,47 @@ func (c *Connection) RegisterConsumer(consumerName string, handler func(ctx cont
 					err := handler(c.Ctx, msg)
 					if err != nil {
 						log.Printf("consumer %s: handler error: %v", consumerName, err)
-						if err = consumer.conCh.Reject(msg.DeliveryTag, true); err != nil {
-							log.Printf("consumer %s: failed to reject delivery tag %d: %v", consumerName, msg.DeliveryTag, err)
+						if msg.Headers == nil {
+							msg.Headers = make(amqp.Table)
 						}
-						continue
+						count := getRetryCountFromHeaders(&msg.Headers)
+						count += 1
+						if count >= consumer.MaxFailedAttempts {
+							log.Printf("consumer %s: message delivery tag %d exceeded max failed attempts (%d), rejecting", consumerName, msg.DeliveryTag, consumer.MaxFailedAttempts)
+							if err := consumer.conCh.Reject(msg.DeliveryTag, false); err != nil {
+								log.Printf("consumer %s: failed to reject delivery tag %d: %v", consumerName, msg.DeliveryTag, err)
+							}
+							continue
+						}
+
+						msg.Headers[FAILED_MSG_RETRY_COUNT_HEADER] = count
+						if err := consumer.conCh.Publish("", consumer.Queue, false, false, amqp.Publishing{
+							Headers:         msg.Headers,
+							ContentType:     msg.ContentType,
+							ContentEncoding: msg.ContentEncoding,
+							DeliveryMode:    msg.DeliveryMode,
+							Priority:        msg.Priority,
+							CorrelationId:   msg.CorrelationId,
+							ReplyTo:         msg.ReplyTo,
+							Expiration:      msg.Expiration,
+							MessageId:       msg.MessageId,
+							Timestamp:       msg.Timestamp,
+							Type:            msg.Type,
+							UserId:          msg.UserId,
+							AppId:           msg.AppId,
+							Body:            msg.Body,
+						}); err != nil {
+							log.Printf("consumer %s: failed to republish delivery tag %d: %v", consumerName, msg.DeliveryTag, err)
+							if err := consumer.conCh.Reject(msg.DeliveryTag, true); err != nil {
+								log.Printf("consumer %s: failed to reject delivery tag %d: %v", consumerName, msg.DeliveryTag, err)
+							}
+							continue
+						}
 					}
 					log.Printf("acking msg with id %d", msg.DeliveryTag)
 					if err = consumer.conCh.Ack(msg.DeliveryTag, false); err != nil {
 						log.Printf("consumer %s: failed to Ack delivery tag %d: %v", consumerName, msg.DeliveryTag, err)
 					}
-
 				}
 			case <-c.Ctx.Done():
 				{
@@ -198,4 +239,32 @@ func (c *Connection) RegisterConsumer(consumerName string, handler func(ctx cont
 		}
 	}()
 	return nil
+}
+
+func (p *Publisher) Publish(ctx context.Context, msg amqp.Publishing, rKey string) error {
+	// the provided routingKey takes precedance over the publisher's default routingKey
+	var routingKey string
+	if rKey == "" {
+		if p.RoutingKey == "" {
+			return fmt.Errorf("publisher's default routingKey and the provided routingKey are both empty !")
+		}
+		routingKey = p.RoutingKey
+	} else {
+		routingKey = rKey
+	}
+
+	timeoutCtx, cancel := context.WithTimeout(ctx, time.Second*3)
+	defer cancel()
+	confirmation, err := p.PubCh.PublishWithDeferredConfirmWithContext(ctx, p.Exchange, routingKey, false, false, msg)
+	if err != nil {
+		return err
+	}
+	ok, err := confirmation.WaitContext(timeoutCtx)
+	if err != nil {
+		return fmt.Errorf("confirm not received: %w", err)
+	}
+	if !ok {
+		return fmt.Errorf("message nacked by broker")
+	}
+	return err
 }

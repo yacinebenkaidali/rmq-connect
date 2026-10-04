@@ -3,20 +3,23 @@
   "exchanges": [
     {
       "name": "exchage01",
-      "type": "direct"
+      "type": "direct",
+      "durability": true
     }
   ],
   "queues": [
     {
       "name": "queue-1",
       "exchange": "exchage01",
-      "bindingKey": "bindingKey"
+      "bindingKey": "bindingKey",
+      "durability": true
     }
   ],
   "consumers": [
     {
       "name": "consumer01",
-      "queue": "queue-1"
+      "queue": "queue-1",
+      "prefetchCount": 10
     }
   ],
   "publishers": [

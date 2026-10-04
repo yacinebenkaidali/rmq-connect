@@ -59,13 +59,10 @@ func run() error {
 	}
 
 	for range 5 {
-		if err := publisher.PubCh.PublishWithContext(
+		if err := publisher.Publish(
 			conn.Ctx,
-			publisher.Exchange,
-			publisher.RoutingKey,
-			false,
-			false,
 			amqp.Publishing{Body: []byte("dummy test message")},
+			publisher.RoutingKey,
 		); err != nil {
 			log.Printf("failed to publish test message: %v", err)
 		}
