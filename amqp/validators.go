@@ -46,6 +46,19 @@ func validateConsumer(c *Consumer, i int, queues map[string]struct{}) error {
 	return nil
 }
 
+func validatePublisher(publisher *Publisher, i int, exchanges map[string]string) error {
+	if publisher.Name == "" {
+		return fmt.Errorf("publisher %d name is required", i)
+	}
+	if publisher.Exchange == "" {
+		return fmt.Errorf("publisher %d exchange name is required", i)
+	}
+	if _, ok := exchanges[publisher.Exchange]; !ok {
+		return fmt.Errorf("publisher's exchange %s is not declared !", publisher.Exchange)
+	}
+	return nil
+}
+
 func validateAMQP(cfg *AMQP) error {
 	if cfg.BrokerURI == "" {
 		return fmt.Errorf("broker URI is required to connect to the AMQP broker")
@@ -63,6 +76,7 @@ func validateAMQP(cfg *AMQP) error {
 	exchanges := make(map[string]string) // name ==> type
 	queues := make(map[string]struct{})
 	consumers := make(map[string]struct{})
+	publishers := make(map[string]struct{})
 
 	for i, e := range cfg.Exchanges {
 		if _, ok := exchanges[e.Name]; ok {
@@ -92,6 +106,18 @@ func validateAMQP(cfg *AMQP) error {
 			return err
 		}
 		consumers[c.Name] = struct{}{}
+	}
+
+	for i, pub := range cfg.Publishers {
+		if _, ok := publishers[pub.Name]; ok {
+			return fmt.Errorf("publisher %s declared more than once", pub.Name)
+		}
+
+		if err := validatePublisher(&pub, i, exchanges); err != nil {
+			return err
+		}
+		publishers[pub.Name] = struct{}{}
+
 	}
 
 	return nil
