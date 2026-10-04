@@ -33,8 +33,10 @@ type Consumer struct {
 }
 
 type Publisher struct {
-	name  string
-	conCh *amqp.Channel
+	name     string
+	pubCh    *amqp.Channel
+	exchange string
+	routing  string
 }
 
 func main() {
@@ -68,7 +70,27 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// var forever chan struct{}
+	publisherName := "publisher01"
+	publisher := conn.Publishers[publisherName]
+
+	if publisher == nil {
+		log.Fatal(fmt.Errorf("publisher %s was not registered !", publisherName))
+	}
+
+	// go func() {
+	for range 5 {
+		if err := publisher.pubCh.PublishWithContext(
+			conn.Ctx,
+			publisher.exchange,
+			publisher.routing,
+			true,
+			false,
+			amqp.Publishing{Body: []byte("dummy test message")},
+		); err != nil {
+			log.Printf("failed to publish test message: %v", err)
+		}
+	}
+	// }()
 
 	defer cancel()
 
@@ -85,6 +107,11 @@ func Connect(cfg *lAMQP.AMQP, ctx context.Context) (*Connection, error) {
 		return nil, err
 	}
 
+	pubConn, err := amqp.Dial(cfg.BrokerURI)
+	if err != nil {
+		return nil, err
+	}
+
 	topoCh, err := conConn.Channel()
 	if err != nil {
 		return nil, err
@@ -94,7 +121,7 @@ func Connect(cfg *lAMQP.AMQP, ctx context.Context) (*Connection, error) {
 		Ctx:        ctx,
 		ConConn:    conConn,
 		cfg:        cfg,
-		PubConn:    nil, //TODO
+		PubConn:    pubConn,
 		topologyCh: topoCh,
 		Consumers:  make(map[string]*Consumer),
 		Publishers: make(map[string]*Publisher),
@@ -111,8 +138,11 @@ func (c *Connection) RegisterConsumer(consumerName string, handler func(ctx cont
 	go func() {
 		for {
 			select {
-			case msg := <-consumer.conHandlerCh:
+			case msg, ok := <-consumer.conHandlerCh:
 				{
+					if !ok {
+						return
+					}
 					// recheck this when we support more consumer fields
 					err := handler(c.Ctx, msg)
 					if err != nil {
@@ -122,6 +152,7 @@ func (c *Connection) RegisterConsumer(consumerName string, handler func(ctx cont
 						}
 						continue
 					}
+					log.Printf("acking msg with id %d", msg.DeliveryTag)
 					if err = consumer.conCh.Ack(msg.DeliveryTag, false); err != nil {
 						log.Printf("consumer %s: failed to Ack delivery tag %d: %v", consumerName, msg.DeliveryTag, err)
 					}
@@ -189,6 +220,20 @@ func (c *Connection) Setup() error {
 			name:         consumer.Name,
 			conCh:        ch,
 			conHandlerCh: msgs,
+		}
+	}
+
+	for _, publisher := range c.cfg.Publishers {
+		ch, err := c.PubConn.Channel()
+		if err != nil {
+			return err
+		}
+
+		c.Publishers[publisher.Name] = &Publisher{
+			name:     publisher.Name,
+			pubCh:    ch,
+			exchange: publisher.Exchange,
+			routing:  publisher.RoutingKey,
 		}
 	}
 

@@ -10,3 +10,7 @@ queues:
 consumers:
   - name: consumer01
     queue: queue-1
+publishers:
+  - name: publisher01
+    exchange: exchage01
+    routingKey: bindingKey

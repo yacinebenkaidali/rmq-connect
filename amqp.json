@@ -18,5 +18,12 @@
       "name": "consumer01",
       "queue": "queue-1"
     }
+  ],
+  "publishers": [
+    {
+      "name": "publisher",
+      "exchange": "exchage01",
+      "routingKey": "bindingKey"
+    }
   ]
 }
