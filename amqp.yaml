@@ -13,6 +13,7 @@ consumers:
   - name: consumer01
     queue: queue-1
     prefetchCount: 10
+    maxFailedAttempts: 5
 publishers:
   - name: publisher01
     exchange: exchage01

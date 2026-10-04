@@ -113,7 +113,9 @@ func (c *Connection) Setup() error {
 			return err
 		}
 
-		ch.Qos(consumer.PrefetchCount, 0, false)
+		if err := ch.Qos(consumer.PrefetchCount, 0, false); err != nil {
+			return err
+		}
 		msgs, err := ch.Consume(
 			consumer.Queue, // queue
 			consumer.Name,  // consumer
@@ -128,9 +130,12 @@ func (c *Connection) Setup() error {
 		}
 
 		c.Consumers[consumer.Name] = &Consumer{
-			Name:         consumer.Name,
-			conCh:        ch,
-			conHandlerCh: msgs,
+			Name:              consumer.Name,
+			conCh:             ch,
+			conHandlerCh:      msgs,
+			Queue:             consumer.Queue,
+			PrefetchCount:     consumer.PrefetchCount,
+			MaxFailedAttempts: consumer.MaxFailedAttempts,
 		}
 	}
 
@@ -184,16 +189,47 @@ func (c *Connection) RegisterConsumer(consumerName string, handler func(ctx cont
 					err := handler(c.Ctx, msg)
 					if err != nil {
 						log.Printf("consumer %s: handler error: %v", consumerName, err)
-						if err = consumer.conCh.Reject(msg.DeliveryTag, true); err != nil {
-							log.Printf("consumer %s: failed to reject delivery tag %d: %v", consumerName, msg.DeliveryTag, err)
+						if msg.Headers == nil {
+							msg.Headers = make(amqp.Table)
 						}
-						continue
+						count := getRetryCountFromHeaders(&msg.Headers)
+						count += 1
+						if count >= consumer.MaxFailedAttempts {
+							log.Printf("consumer %s: message delivery tag %d exceeded max failed attempts (%d), rejecting", consumerName, msg.DeliveryTag, consumer.MaxFailedAttempts)
+							if err := consumer.conCh.Reject(msg.DeliveryTag, false); err != nil {
+								log.Printf("consumer %s: failed to reject delivery tag %d: %v", consumerName, msg.DeliveryTag, err)
+							}
+							continue
+						}
+
+						msg.Headers[FAILED_MSG_RETRY_COUNT_HEADER] = count
+						if err := consumer.conCh.Publish("", consumer.Queue, false, false, amqp.Publishing{
+							Headers:         msg.Headers,
+							ContentType:     msg.ContentType,
+							ContentEncoding: msg.ContentEncoding,
+							DeliveryMode:    msg.DeliveryMode,
+							Priority:        msg.Priority,
+							CorrelationId:   msg.CorrelationId,
+							ReplyTo:         msg.ReplyTo,
+							Expiration:      msg.Expiration,
+							MessageId:       msg.MessageId,
+							Timestamp:       msg.Timestamp,
+							Type:            msg.Type,
+							UserId:          msg.UserId,
+							AppId:           msg.AppId,
+							Body:            msg.Body,
+						}); err != nil {
+							log.Printf("consumer %s: failed to republish delivery tag %d: %v", consumerName, msg.DeliveryTag, err)
+							if err := consumer.conCh.Reject(msg.DeliveryTag, true); err != nil {
+								log.Printf("consumer %s: failed to reject delivery tag %d: %v", consumerName, msg.DeliveryTag, err)
+							}
+							continue
+						}
 					}
 					log.Printf("acking msg with id %d", msg.DeliveryTag)
 					if err = consumer.conCh.Ack(msg.DeliveryTag, false); err != nil {
 						log.Printf("consumer %s: failed to Ack delivery tag %d: %v", consumerName, msg.DeliveryTag, err)
 					}
-
 				}
 			case <-c.Ctx.Done():
 				{

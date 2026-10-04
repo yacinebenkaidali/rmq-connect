@@ -26,9 +26,10 @@ type Queue struct {
 	Durability bool   `yaml:"durability" json:"durability"`
 }
 type Consumer struct {
-	Name          string `yaml:"name" json:"name"`
-	Queue         string `yaml:"queue" json:"queue"`
-	PrefetchCount int    `yaml:"prefetchCount" json:"prefetchCount"`
+	Name              string `yaml:"name" json:"name"`
+	Queue             string `yaml:"queue" json:"queue"`
+	PrefetchCount     int    `yaml:"prefetchCount" json:"prefetchCount"`
+	MaxFailedAttempts int    `yaml:"maxFailedAttempts" json:"maxFailedAttempts"`
 
 	conHandlerCh <-chan amqp.Delivery
 	conCh        *amqp.Channel
