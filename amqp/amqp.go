@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 	"gopkg.in/yaml.v3"
@@ -137,6 +138,9 @@ func (c *Connection) Setup() error {
 		if err != nil {
 			return err
 		}
+		if err := ch.Confirm(false); err != nil {
+			return err
+		}
 
 		c.Publishers[publisher.Name] = &Publisher{
 			Name:       publisher.Name,
@@ -198,4 +202,32 @@ func (c *Connection) RegisterConsumer(consumerName string, handler func(ctx cont
 		}
 	}()
 	return nil
+}
+
+func (p *Publisher) Publish(ctx context.Context, msg amqp.Publishing, rKey string) error {
+	// the provided routingKey takes precedance over the publisher's default routingKey
+	var routingKey string
+	if rKey == "" {
+		if p.RoutingKey == "" {
+			return fmt.Errorf("publisher's default routingKey and the provided routingKey are both empty !")
+		}
+		routingKey = p.RoutingKey
+	} else {
+		routingKey = rKey
+	}
+
+	timeoutCtx, cancel := context.WithTimeout(ctx, time.Second*3)
+	defer cancel()
+	confirmation, err := p.PubCh.PublishWithDeferredConfirmWithContext(ctx, p.Exchange, routingKey, false, false, msg)
+	if err != nil {
+		return err
+	}
+	ok, err := confirmation.WaitContext(timeoutCtx)
+	if err != nil {
+		return fmt.Errorf("confirm not received: %w", err)
+	}
+	if !ok {
+		return fmt.Errorf("message nacked by broker")
+	}
+	return err
 }
