@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -66,13 +67,14 @@ func NewConnection(cfg *AMQP, ctx context.Context) (*Connection, error) {
 	}
 
 	connection := Connection{
-		Ctx:        ctx,
-		ConConn:    conConn,
-		cfg:        cfg,
-		PubConn:    pubConn,
-		topologyCh: topoCh,
-		Consumers:  make(map[string]*Consumer),
-		Publishers: make(map[string]*Publisher),
+		Ctx:         ctx,
+		ConConn:     conConn,
+		cfg:         cfg,
+		PubConn:     pubConn,
+		topologyCh:  topoCh,
+		Consumers:   make(map[string]*Consumer),
+		Publishers:  make(map[string]*Publisher),
+		consumersWg: sync.WaitGroup{},
 	}
 
 	return &connection, err
@@ -160,6 +162,12 @@ func (c *Connection) Setup() error {
 }
 
 func (c *Connection) Close() error {
+	for _, c := range c.Consumers {
+		if err := c.conCh.Cancel(c.Name, false); err != nil {
+			return err
+		}
+	}
+	c.consumersWg.Wait()
 	if c.ConConn != nil && !c.ConConn.IsClosed() {
 		if err := c.ConConn.Close(); err != nil {
 			return err
@@ -177,7 +185,7 @@ func (c *Connection) RegisterConsumer(consumerName string, handler func(ctx cont
 	if !ok {
 		return fmt.Errorf("the consumer %s was not declared in the config file", consumerName)
 	}
-	go func() {
+	c.consumersWg.Go(func() {
 		for {
 			select {
 			case msg, ok := <-consumer.conHandlerCh:
@@ -237,7 +245,7 @@ func (c *Connection) RegisterConsumer(consumerName string, handler func(ctx cont
 				}
 			}
 		}
-	}()
+	})
 	return nil
 }
 

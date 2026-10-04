@@ -2,6 +2,7 @@ package amqp
 
 import (
 	"context"
+	"sync"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -51,5 +52,6 @@ type Connection struct {
 	Consumers  map[string]*Consumer
 	Publishers map[string]*Publisher
 
-	cfg *AMQP
+	cfg         *AMQP
+	consumersWg sync.WaitGroup
 }
