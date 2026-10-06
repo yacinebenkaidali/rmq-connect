@@ -3,7 +3,7 @@ brokerURI: amqp://guest:guest@localhost:5672/
 exchanges:
   - name: exchage01
     type: direct
-    durability: true
+    durability: false
 queues:
   - name: queue-1
     exchange: exchage01

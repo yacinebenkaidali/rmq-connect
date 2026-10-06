@@ -43,14 +43,14 @@ type Publisher struct {
 	PubCh *amqp.Channel
 }
 type Connection struct {
-	Ctx     context.Context
-	PubConn *amqp.Connection // publisher connection
-	ConConn *amqp.Connection // consumer connection
+	ctx     context.Context
+	pubConn *amqp.Connection // publisher connection
+	conConn *amqp.Connection // consumer connection
 
 	topologyCh *amqp.Channel
 
-	Consumers  map[string]*Consumer
-	Publishers map[string]*Publisher
+	consumers  map[string]*Consumer
+	publishers map[string]*Publisher
 
 	cfg         *AMQP
 	consumersWg sync.WaitGroup

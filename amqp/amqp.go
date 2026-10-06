@@ -46,7 +46,7 @@ func LoadConfigFile(path string) (*AMQP, error) {
 	return &cfg, err
 }
 
-func NewConnection(cfg *AMQP, ctx context.Context) (*Connection, error) {
+func NewBrokerClient(cfg *AMQP, ctx context.Context) (*Connection, error) {
 
 	conConn, err := amqp.Dial(cfg.BrokerURI)
 	if err != nil {
@@ -67,14 +67,17 @@ func NewConnection(cfg *AMQP, ctx context.Context) (*Connection, error) {
 	}
 
 	connection := Connection{
-		Ctx:         ctx,
-		ConConn:     conConn,
+		ctx:         ctx,
+		conConn:     conConn,
 		cfg:         cfg,
-		PubConn:     pubConn,
+		pubConn:     pubConn,
 		topologyCh:  topoCh,
-		Consumers:   make(map[string]*Consumer),
-		Publishers:  make(map[string]*Publisher),
+		consumers:   make(map[string]*Consumer),
+		publishers:  make(map[string]*Publisher),
 		consumersWg: sync.WaitGroup{},
+	}
+	if err := connection.Setup(); err != nil {
+		return nil, err
 	}
 
 	return &connection, err
@@ -110,7 +113,7 @@ func (c *Connection) Setup() error {
 	}
 	// declaring consumers
 	for _, consumer := range c.cfg.Consumers {
-		ch, err := c.ConConn.Channel()
+		ch, err := c.conConn.Channel()
 		if err != nil {
 			return err
 		}
@@ -131,7 +134,7 @@ func (c *Connection) Setup() error {
 			return err
 		}
 
-		c.Consumers[consumer.Name] = &Consumer{
+		c.consumers[consumer.Name] = &Consumer{
 			Name:              consumer.Name,
 			conCh:             ch,
 			conHandlerCh:      msgs,
@@ -142,7 +145,7 @@ func (c *Connection) Setup() error {
 	}
 
 	for _, publisher := range c.cfg.Publishers {
-		ch, err := c.PubConn.Channel()
+		ch, err := c.pubConn.Channel()
 		if err != nil {
 			return err
 		}
@@ -150,7 +153,7 @@ func (c *Connection) Setup() error {
 			return err
 		}
 
-		c.Publishers[publisher.Name] = &Publisher{
+		c.publishers[publisher.Name] = &Publisher{
 			Name:       publisher.Name,
 			PubCh:      ch,
 			Exchange:   publisher.Exchange,
@@ -162,26 +165,26 @@ func (c *Connection) Setup() error {
 }
 
 func (c *Connection) Close() error {
-	for _, c := range c.Consumers {
+	for _, c := range c.consumers {
 		if err := c.conCh.Cancel(c.Name, false); err != nil {
 			return err
 		}
 	}
 	c.consumersWg.Wait()
-	if c.ConConn != nil && !c.ConConn.IsClosed() {
-		if err := c.ConConn.Close(); err != nil {
+	if c.conConn != nil && !c.conConn.IsClosed() {
+		if err := c.conConn.Close(); err != nil {
 			return err
 		}
 	}
 
-	if c.PubConn != nil && !c.PubConn.IsClosed() {
-		return c.PubConn.Close()
+	if c.pubConn != nil && !c.pubConn.IsClosed() {
+		return c.pubConn.Close()
 	}
 	return nil
 }
 
 func (c *Connection) RegisterConsumer(consumerName string, handler func(ctx context.Context, msg amqp.Delivery) error) error {
-	consumer, ok := c.Consumers[consumerName]
+	consumer, ok := c.consumers[consumerName]
 	if !ok {
 		return fmt.Errorf("the consumer %s was not declared in the config file", consumerName)
 	}
@@ -194,7 +197,7 @@ func (c *Connection) RegisterConsumer(consumerName string, handler func(ctx cont
 						return
 					}
 					// recheck this when we support more consumer fields
-					err := handler(c.Ctx, msg)
+					err := handler(c.ctx, msg)
 					if err != nil {
 						log.Printf("consumer %s: handler error: %v", consumerName, err)
 						if msg.Headers == nil {
@@ -239,7 +242,7 @@ func (c *Connection) RegisterConsumer(consumerName string, handler func(ctx cont
 						log.Printf("consumer %s: failed to Ack delivery tag %d: %v", consumerName, msg.DeliveryTag, err)
 					}
 				}
-			case <-c.Ctx.Done():
+			case <-c.ctx.Done():
 				{
 					return
 				}
@@ -247,6 +250,10 @@ func (c *Connection) RegisterConsumer(consumerName string, handler func(ctx cont
 		}
 	})
 	return nil
+}
+
+func (c *Connection) GetPublisher(publisherName string) *Publisher {
+	return c.publishers[publisherName]
 }
 
 func (p *Publisher) Publish(ctx context.Context, msg amqp.Publishing, rKey string) error {

@@ -5,9 +5,11 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math/rand"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 	lAMQP "github.com/yacinebenkaidali/rmq-connect/amqp"
@@ -33,16 +35,11 @@ func run() error {
 	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGTERM, os.Interrupt)
 	defer cancel()
 
-	conn, err := lAMQP.NewConnection(amqpCfg, ctx)
+	conn, err := lAMQP.NewBrokerClient(amqpCfg, ctx)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
-
-	//declare queues first, then consumers
-	if err := conn.Setup(); err != nil {
-		return err
-	}
 
 	if err := conn.RegisterConsumer("consumer01", func(ctx context.Context, msg amqp.Delivery) error {
 		log.Println("consumer01, received ", string(msg.Body))
@@ -52,21 +49,24 @@ func run() error {
 	}
 
 	publisherName := "publisher01"
-	publisher := conn.Publishers[publisherName]
+	publisher := conn.GetPublisher(publisherName)
 
 	if publisher == nil {
 		return fmt.Errorf("publisher %s was not registered !", publisherName)
 	}
 
-	for range 5 {
-		if err := publisher.Publish(
-			conn.Ctx,
-			amqp.Publishing{Body: []byte("dummy test message")},
-			publisher.RoutingKey,
-		); err != nil {
-			log.Printf("failed to publish test message: %v", err)
+	go func() {
+		for range 5 {
+			time.Sleep(time.Second * time.Duration(rand.Intn(5)))
+			if err := publisher.Publish(
+				context.TODO(),
+				amqp.Publishing{Body: []byte("dummy test message")},
+				publisher.RoutingKey,
+			); err != nil {
+				log.Printf("failed to publish test message: %v", err)
+			}
 		}
-	}
+	}()
 
 	log.Println("consuming")
 	<-ctx.Done()
