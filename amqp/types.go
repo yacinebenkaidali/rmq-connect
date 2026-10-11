@@ -33,6 +33,7 @@ type Consumer struct {
 	MaxFailedAttempts int    `yaml:"maxFailedAttempts" json:"maxFailedAttempts"`
 
 	conHandlerCh <-chan amqp.Delivery
+	handler      func(ctx context.Context, msg amqp.Delivery) error
 	conCh        *amqp.Channel
 }
 type Publisher struct {
@@ -40,7 +41,7 @@ type Publisher struct {
 	Exchange   string `yaml:"exchange" json:"exchange"`
 	RoutingKey string `yaml:"routingKey" json:"routingKey"`
 
-	PubCh *amqp.Channel
+	pubCh *amqp.Channel
 }
 type Connection struct {
 	ctx     context.Context

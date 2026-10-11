@@ -3,6 +3,7 @@ package amqp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -46,7 +47,7 @@ func LoadConfigFile(path string) (*AMQP, error) {
 	return &cfg, err
 }
 
-func NewBrokerClient(cfg *AMQP, ctx context.Context) (*Connection, error) {
+func NewBrokerClient(ctx context.Context, cfg *AMQP) (*Connection, error) {
 
 	conConn, err := amqp.Dial(cfg.BrokerURI)
 	if err != nil {
@@ -76,14 +77,15 @@ func NewBrokerClient(cfg *AMQP, ctx context.Context) (*Connection, error) {
 		publishers:  make(map[string]*Publisher),
 		consumersWg: sync.WaitGroup{},
 	}
-	if err := connection.Setup(); err != nil {
-		return nil, err
+	if err := connection.setup(); err != nil {
+		var errGrp = errors.Join(err, pubConn.Close(), conConn.Close())
+		return nil, errGrp
 	}
 
 	return &connection, err
 }
 
-func (c *Connection) Setup() error {
+func (c *Connection) setup() error {
 	// exchanges → queues (+ bind) → consumers
 	// declaring Exchanges
 	for _, e := range c.cfg.Exchanges {
@@ -118,26 +120,9 @@ func (c *Connection) Setup() error {
 			return err
 		}
 
-		if err := ch.Qos(consumer.PrefetchCount, 0, false); err != nil {
-			return err
-		}
-		msgs, err := ch.Consume(
-			consumer.Queue, // queue
-			consumer.Name,  // consumer
-			false,          // auto-ack
-			false,          // exclusive
-			false,          // no-local
-			false,          // no-wait
-			nil,            // args
-		)
-		if err != nil {
-			return err
-		}
-
 		c.consumers[consumer.Name] = &Consumer{
 			Name:              consumer.Name,
 			conCh:             ch,
-			conHandlerCh:      msgs,
 			Queue:             consumer.Queue,
 			PrefetchCount:     consumer.PrefetchCount,
 			MaxFailedAttempts: consumer.MaxFailedAttempts,
@@ -155,7 +140,7 @@ func (c *Connection) Setup() error {
 
 		c.publishers[publisher.Name] = &Publisher{
 			Name:       publisher.Name,
-			PubCh:      ch,
+			pubCh:      ch,
 			Exchange:   publisher.Exchange,
 			RoutingKey: publisher.RoutingKey,
 		}
@@ -165,22 +150,23 @@ func (c *Connection) Setup() error {
 }
 
 func (c *Connection) Close() error {
-	for _, c := range c.consumers {
-		if err := c.conCh.Cancel(c.Name, false); err != nil {
-			return err
+	var errGrp error
+	for _, consumer := range c.consumers {
+		if err := consumer.conCh.Cancel(consumer.Name, false); err != nil {
+			errGrp = errors.Join(errGrp, err)
 		}
 	}
 	c.consumersWg.Wait()
 	if c.conConn != nil && !c.conConn.IsClosed() {
 		if err := c.conConn.Close(); err != nil {
-			return err
+			errGrp = errors.Join(errGrp, err)
 		}
 	}
 
 	if c.pubConn != nil && !c.pubConn.IsClosed() {
-		return c.pubConn.Close()
+		return errors.Join(errGrp, c.pubConn.Close())
 	}
-	return nil
+	return errGrp
 }
 
 func (c *Connection) RegisterConsumer(consumerName string, handler func(ctx context.Context, msg amqp.Delivery) error) error {
@@ -188,6 +174,30 @@ func (c *Connection) RegisterConsumer(consumerName string, handler func(ctx cont
 	if !ok {
 		return fmt.Errorf("the consumer %s was not declared in the config file", consumerName)
 	}
+	if consumer.handler != nil {
+		return fmt.Errorf("consumer %s: handler already registered", consumerName)
+	}
+
+	if err := consumer.conCh.Qos(consumer.PrefetchCount, 0, false); err != nil {
+		return err
+	}
+
+	msgs, err := consumer.conCh.Consume(
+		consumer.Queue, // queue
+		consumer.Name,  // consumer
+		false,          // auto-ack
+		false,          // exclusive
+		false,          // no-local
+		false,          // no-wait
+		nil,            // args
+	)
+	if err != nil {
+		return err
+	}
+
+	consumer.handler = handler
+	consumer.conHandlerCh = msgs
+
 	c.consumersWg.Go(func() {
 		for {
 			select {
@@ -260,9 +270,6 @@ func (p *Publisher) Publish(ctx context.Context, msg amqp.Publishing, rKey strin
 	// the provided routingKey takes precedance over the publisher's default routingKey
 	var routingKey string
 	if rKey == "" {
-		if p.RoutingKey == "" {
-			return fmt.Errorf("publisher's default routingKey and the provided routingKey are both empty !")
-		}
 		routingKey = p.RoutingKey
 	} else {
 		routingKey = rKey
@@ -270,7 +277,7 @@ func (p *Publisher) Publish(ctx context.Context, msg amqp.Publishing, rKey strin
 
 	timeoutCtx, cancel := context.WithTimeout(ctx, time.Second*3)
 	defer cancel()
-	confirmation, err := p.PubCh.PublishWithDeferredConfirmWithContext(ctx, p.Exchange, routingKey, false, false, msg)
+	confirmation, err := p.pubCh.PublishWithDeferredConfirmWithContext(ctx, p.Exchange, routingKey, false, false, msg)
 	if err != nil {
 		return err
 	}

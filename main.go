@@ -35,7 +35,7 @@ func run() error {
 	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGTERM, os.Interrupt)
 	defer cancel()
 
-	conn, err := lAMQP.NewBrokerClient(amqpCfg, ctx)
+	conn, err := lAMQP.NewBrokerClient(ctx, amqpCfg)
 	if err != nil {
 		return err
 	}
@@ -56,7 +56,7 @@ func run() error {
 	}
 
 	go func() {
-		for range 5 {
+		for range 3 {
 			time.Sleep(time.Second * time.Duration(rand.Intn(5)))
 			if err := publisher.Publish(
 				context.TODO(),
