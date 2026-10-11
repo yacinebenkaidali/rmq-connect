@@ -56,8 +56,8 @@ func run() error {
 	}
 
 	go func() {
-		for range 3 {
-			time.Sleep(time.Second * time.Duration(rand.Intn(5)))
+		for range 10 {
+			time.Sleep(time.Second * time.Duration(rand.Intn(25)))
 			if err := publisher.Publish(
 				context.TODO(),
 				amqp.Publishing{Body: []byte("dummy test message")},

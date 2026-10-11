@@ -268,9 +268,6 @@ func (c *Connection) resetup(attempt uint16) error {
 		closePubErr := c.pubConn.Close()
 		closeConErr := c.conConn.Close()
 		errGrp = errors.Join(closePubErr, closeConErr)
-		if errGrp != nil {
-			log.Printf("amqp reconnect setup cleanup failed: brokerURI=%s, err=%v", c.brokerURI, errGrp)
-		}
 		return errGrp
 	}
 
@@ -278,7 +275,6 @@ func (c *Connection) resetup(attempt uint16) error {
 		if consumer.handler != nil {
 			err := consumer.setup(consumer.handler)
 			if err != nil {
-				log.Printf("amqp reconnect handler re-attach failed: brokerURI=%s, consumer=%s, queue=%s, err=%v", c.brokerURI, consumer.Name, consumer.Queue, err)
 				return err
 			} else {
 				c.startConsumer(consumer)
