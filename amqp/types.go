@@ -42,11 +42,18 @@ type Publisher struct {
 	RoutingKey string `yaml:"routingKey" json:"routingKey"`
 
 	pubCh *amqp.Channel
+	mu    sync.Mutex
 }
 type Connection struct {
-	ctx     context.Context
-	pubConn *amqp.Connection // publisher connection
-	conConn *amqp.Connection // consumer connection
+	ctx       context.Context
+	brokerURI string
+	pubConn   *amqp.Connection // publisher connection
+	conConn   *amqp.Connection // consumer connection
+	mu        sync.Mutex
+	isClosed  bool
+
+	consumerNotifyCloseCh  chan *amqp.Error
+	publisherNotifyCloseCh chan *amqp.Error
 
 	topologyCh *amqp.Channel
 

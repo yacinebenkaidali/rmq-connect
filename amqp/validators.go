@@ -120,16 +120,16 @@ func validateAMQP(cfg *AMQP) error {
 		}
 		consumers[c.Name] = struct{}{}
 	}
+	for i := 0; i < len(cfg.Publishers); i++ {
 
-	for i, pub := range cfg.Publishers {
-		if _, ok := publishers[pub.Name]; ok {
-			return fmt.Errorf("publisher %s declared more than once", pub.Name)
+		if _, ok := publishers[cfg.Publishers[i].Name]; ok {
+			return fmt.Errorf("publisher %s declared more than once", cfg.Publishers[i].Name)
 		}
 
-		if err := validatePublisher(&pub, i, exchanges); err != nil {
+		if err := validatePublisher(&cfg.Publishers[i], i, exchanges); err != nil {
 			return err
 		}
-		publishers[pub.Name] = struct{}{}
+		publishers[cfg.Publishers[i].Name] = struct{}{}
 
 	}
 
